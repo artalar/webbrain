@@ -119,6 +119,8 @@ export class Agent {
     this._compactCooldown = new Map();
     this.autoScreenshot = 'state_change';
     this.useSiteAdapters = true;
+    this.useWebMcp = false;
+    this._webmcpCache = new Map();
     this.costAllowanceSessionUsd = DEFAULT_CLOUD_COST_ALLOWANCE_USD;
     this.costAllowanceTotalUsd = DEFAULT_CLOUD_COST_ALLOWANCE_USD;
     this.cloudCostSpentUsd = 0;
@@ -4981,7 +4983,33 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   _isUntrustedTool(name) {
-    return UNTRUSTED_CONTENT_TOOLS.has(name) || this._skillToolForName(name)?.resultPolicy === 'untrusted';
+    if (UNTRUSTED_CONTENT_TOOLS.has(name)) return true;
+    if (this._skillToolForName(name)?.resultPolicy === 'untrusted') return true;
+    return false;
+  }
+
+  _webmcpEnabled() {
+    return false;
+  }
+
+  async _discoverWebMcpTools() {
+    return {
+      ok: false,
+      tools: [],
+      error: 'WebMCP is Chrome-only. Firefox does not expose the WebMCP CDP domain or document.modelContext agent bridge yet.',
+    };
+  }
+
+  _webmcpToolForName() {
+    return null;
+  }
+
+  _webmcpToolDefinitions() {
+    return [];
+  }
+
+  async _ensureWebMcpToolsForTurn() {
+    return [];
   }
 
   _refreshSystemPrompts() {
@@ -8177,6 +8205,15 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (skillTool) {
       return await executeHttpSkillTool(skillTool, args, { tabId });
     }
+    if (name === 'list_webmcp_tools') {
+      return {
+        success: false,
+        available: false,
+        count: 0,
+        tools: [],
+        error: 'WebMCP is not available on Firefox. Use Chrome with WebMCP enabled (origin trial or chrome://flags/#enable-webmcp-testing).',
+      };
+    }
     const skillEndpointRedirect = this._skillEndpointToolRedirect(name, args, tabId);
     if (skillEndpointRedirect) {
       return skillEndpointRedirect;
@@ -9458,12 +9495,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
     const tier = provider.promptTier;
     let skillTools = this._skillToolDefinitions(tabId, mode, tier, this._activeSkillSiteAdapter(tabId));
+    let webmcpTools = await this._ensureWebMcpToolsForTurn(tabId, mode);
     const cloudRunContext = this.cloudRunContexts.get(tabId) || null;
     let tools = getToolsForMode(mode, {
       strictSecretMode: this.strictSecretMode,
       tier,
       skillLoaderTool: this._skillLoaderDefinition(mode, tier),
       skillTools,
+      webmcpTools,
       cloudRun: !!cloudRunContext,
       outputSchema: cloudRunContext?.outputSchema || null,
     });
@@ -9507,11 +9546,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }
 
       skillTools = this._skillToolDefinitions(tabId, mode, tier, this._activeSkillSiteAdapter(tabId));
+      webmcpTools = await this._ensureWebMcpToolsForTurn(tabId, mode);
       tools = getToolsForMode(mode, {
         strictSecretMode: this.strictSecretMode,
         tier,
         skillLoaderTool: this._skillLoaderDefinition(mode, tier),
         skillTools,
+        webmcpTools,
         cloudRun: !!cloudRunContext,
         outputSchema: cloudRunContext?.outputSchema || null,
       });
@@ -9862,12 +9903,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
     const tier = provider.promptTier;
     let skillTools = this._skillToolDefinitions(tabId, mode, tier, this._activeSkillSiteAdapter(tabId));
+    let webmcpTools = await this._ensureWebMcpToolsForTurn(tabId, mode);
     const cloudRunContext = this.cloudRunContexts.get(tabId) || null;
     let tools = getToolsForMode(mode, {
       strictSecretMode: this.strictSecretMode,
       tier,
       skillLoaderTool: this._skillLoaderDefinition(mode, tier),
       skillTools,
+      webmcpTools,
       cloudRun: !!cloudRunContext,
       outputSchema: cloudRunContext?.outputSchema || null,
     });
@@ -9899,11 +9942,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }
 
       skillTools = this._skillToolDefinitions(tabId, mode, tier, this._activeSkillSiteAdapter(tabId));
+      webmcpTools = await this._ensureWebMcpToolsForTurn(tabId, mode);
       tools = getToolsForMode(mode, {
         strictSecretMode: this.strictSecretMode,
         tier,
         skillLoaderTool: this._skillLoaderDefinition(mode, tier),
         skillTools,
+        webmcpTools,
         cloudRun: !!cloudRunContext,
         outputSchema: cloudRunContext?.outputSchema || null,
       });

@@ -798,6 +798,23 @@ export const AGENT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'list_webmcp_tools',
+      description: 'List WebMCP tools the current page has registered for AI agents (document.modelContext / CDP WebMCP domain). Returns each tool\'s name, description, input schema, readOnly hint, and origin. Prefer calling a matching page WebMCP tool from the tool list over DOM click/type when one fits the task. Chrome-only; returns a clear error on Firefox or when WebMCP is unavailable. Use this to inspect tools even when Ask mode hides mutating ones.',
+      parameters: {
+        type: 'object',
+        properties: {
+          refresh: {
+            type: 'boolean',
+            description: 'If true, re-query the page for the latest tool registrations. Default false uses the cached discovery from this tab.',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'download_social_media',
       description: 'One-shot media downloader for major social sites: Facebook, Instagram, X/Twitter, LinkedIn, Reddit, Pinterest, YouTube (thumbnails only). Auto-detects the active site, picks the main photo/video on single-content pages (/photo/, /p/, /reel/, /status/.../photo/, /pin/, /comments/), or every media item on feeds when scroll:true. Handles per-site DOM quirks, upgrades to max resolution (X name=orig, Pinterest /originals/), pairs Reddit DASH video+audio, stitches HLS (incl. AES-128 encrypted), and falls back to opening in a new tab when a CDN blocks CORS. PREFER this over execute_js / download_file / download_resource_from_page whenever the user asks to "download this image/video", "save this photo", "grab the media" on a supported site — it is a single call instead of figuring DOM selectors out manually. Files land in the browser Downloads folder; call list_downloads afterwards to confirm. RESULT SHAPE: `count` is total URLs found; `triggeredCount` is how many we tried to download; `completedCount` is how many were successfully fetched-and-saved; `openedInTabCount` are URLs the browser blocked from direct fetch (we opened them in a new tab — popup-blocking usually kills these AFTER the first one, so a count > 1 here means most did NOT actually save); `failedCount` are hard errors. ALWAYS report honestly: if `completedCount` is much smaller than `count`, say so — do not claim "downloads in progress in the background"; the run is fully synchronous and what is not in `completedCount` is not coming. May also include a `recommendation` object ({kind, message}) when the in-browser path cannot fully handle the request (YouTube DRM video, MSE blob with nothing buffered yet, unsupported site, empty result). When present, relay `recommendation.message` verbatim to the user — it names the right external CLI tool (yt-dlp or gallery-dl) and includes a copy-pasteable command.',
       parameters: {
@@ -871,6 +888,7 @@ export const ASK_ONLY_TOOLS = [
   // wait_for_stable just polls — safe in Ask mode.
   'wait_for_stable',
   'fetch_url', 'research_url', 'list_downloads',
+  'list_webmcp_tools',
 ];
 
 /**
@@ -905,6 +923,7 @@ export const COMPACT_TOOL_NAMES = new Set([
   'click', 'type_text', 'press_keys',
   'navigate', 'new_tab', 'wait_for_element',
   'fetch_url',
+  'list_webmcp_tools',
   'scratchpad_write', 'progress_update', 'progress_read', 'clarify', 'done',
 ]);
 
@@ -1012,6 +1031,16 @@ export function getToolsForMode(mode, opts = {}) {
   if (!devCompactBlocked && Array.isArray(opts.skillTools) && opts.skillTools.length) {
     const seen = new Set([...RESERVED_AGENT_TOOL_NAMES, ...base.map(t => t.function?.name).filter(Boolean)]);
     const extras = opts.skillTools.filter(t => {
+      const name = t?.function?.name;
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+    base = [...base, ...extras];
+  }
+  if (!devCompactBlocked && Array.isArray(opts.webmcpTools) && opts.webmcpTools.length) {
+    const seen = new Set([...RESERVED_AGENT_TOOL_NAMES, ...base.map(t => t.function?.name).filter(Boolean)]);
+    const extras = opts.webmcpTools.filter(t => {
       const name = t?.function?.name;
       if (!name || seen.has(name)) return false;
       seen.add(name);
@@ -1357,6 +1386,7 @@ export const MID_TOOL_NAMES = new Set([
   'fetch_url', 'research_url', 'list_downloads', 'read_downloaded_file',
   'download_files', 'download_resource_from_page', 'download_social_media',
   'upload_file',
+  'list_webmcp_tools',
   'scratchpad_write', 'progress_update', 'progress_read', 'verify_form', 'solve_captcha',
 ]);
 

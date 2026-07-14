@@ -211,6 +211,12 @@ async function loadSiteAdapters() {
 }
 loadSiteAdapters();
 
+async function loadWebMcpSetting() {
+  const stored = await chrome.storage.local.get('useWebMcp');
+  if (stored.useWebMcp != null) agent.useWebMcp = stored.useWebMcp !== false;
+}
+loadWebMcpSetting();
+
 // Local screenshot redaction (issue #312): when on, screenshots are pixelated
 // over DOM-detected PII (form fields + email/phone text) BEFORE leaving the
 // extension for a Vision endpoint. OFF by default.
@@ -765,6 +771,9 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.useSiteAdapters) {
     agent.useSiteAdapters = changes.useSiteAdapters.newValue;
     refreshPrompts = true;
+  }
+  if (changes.useWebMcp) {
+    agent.useWebMcp = changes.useWebMcp.newValue !== false;
   }
   if (changes.screenshotRedaction) {
     agent.screenshotRedaction = !!changes.screenshotRedaction.newValue;

@@ -64,6 +64,18 @@ This is exactly the kind of conversation we love. An external team with deep bro
 
 We are excited about this. Genuinely.
 
+## Shipped in WebBrain
+
+WebMCP support is now integrated in the Chrome build:
+
+- Discover page tools through the CDP `WebMCP` domain (with a `document.modelContext` fallback)
+- Load matching tools into the model's tool list on every agent step
+- Invoke them through CDP / `executeTool`, with permission gating for mutating tools
+- Prefer WebMCP over accessibility-tree actuation when a declared tool fits the task
+- Inspect tools anytime with `list_webmcp_tools`
+
+See [`docs/webmcp.md`](https://github.com/webbrain-one/webbrain/blob/main/docs/webmcp.md) for the full integration notes, security model, and a local demo fixture.
+
 ## An invitation
 
 This is what happens when people from different corners of the ecosystem collide. Dominic is building browser-native AI at Google. We are building local-first browser agents. WebMCP is the bridge between them, and the fact that someone from that world reached out to us tells us we are all solving the same problem from different angles.

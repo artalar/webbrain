@@ -32,6 +32,7 @@ export const Capability = {
   UPLOAD: 'upload',              // upload_file (selects a local file)
   WINDOW: 'window',              // resize_window (changes browser window bounds)
   SCHEDULE: 'schedule',          // schedule_resume / schedule_task persistent future work
+  WEBMCP: 'webmcp',              // mutating page-declared WebMCP tools
 };
 
 // Human-readable verb for the permission prompt: "WebBrain wants to <label> <host>".
@@ -46,6 +47,7 @@ export const CAPABILITY_LABEL = {
   [Capability.UPLOAD]: 'upload a file to',
   [Capability.WINDOW]: 'resize the browser window for',
   [Capability.SCHEDULE]: 'schedule future work for',
+  [Capability.WEBMCP]: 'use page WebMCP tools on',
 };
 
 /**
@@ -110,6 +112,8 @@ export const UNTRUSTED_CONTENT_TOOLS = new Set([
   // are persisted as the final tool message and re-read on the next user turn.
   // The model-authored `summary` is wrapped too, which is harmless.
   'done',
+  // WebMCP meta-tool returns page-declared tool schemas/descriptions.
+  'list_webmcp_tools',
 ]);
 
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -158,6 +162,8 @@ const TOOL_CAPABILITY = {
   download_social_media: Capability.DOWNLOAD,
   schedule_resume: Capability.SCHEDULE,
   schedule_task: Capability.SCHEDULE,
+  // Dynamic page WebMCP tools are gated in agent.js via Capability.WEBMCP when
+  // the page tool is not annotated readOnly. list_webmcp_tools is read-only.
 };
 
 /**

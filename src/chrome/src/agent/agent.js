@@ -7,6 +7,7 @@ import { buildGithubStargazerProgressItems } from './observers/github-stargazers
 import { analyzeMastodonPage, mastodonHandoffInstruction, mastodonProgressGuard } from './observers/mastodon.js';
 import { isProgressActionAllowed, isProgressIntentActive, normalizeProgressAction, normalizeProgressIntent } from './progress-intent.js';
 import { cdpClient } from '../cdp/cdp-client.js';
+import { webmcpClient } from '../cdp/webmcp.js';
 import { getActiveAdapter, UNIVERSAL_PREAMBLE } from './adapters.js';
 import {
   fetchUrl,
@@ -43,6 +44,7 @@ import { extractFirstJsonObject } from './json-extract.js';
 import { sanitizeText as sanitizePlannerText } from './text-sanitize.js';
 import { buildCustomSkillsPrompt, buildSkillLoaderDefinition, buildSkillToolDefinitions, buildSkillToolRegistry, getEligibleCustomSkills, getEligibleSkillCatalog, normalizeCustomSkills } from './skills.js';
 import { publicMediaUrlNeedsExplicitTarget } from './public-media-url.js';
+import { buildWebMcpToolDefinitions, buildWebMcpToolRegistry, formatWebMcpContextNote, isWebMcpMetaTool } from './webmcp-tools.js';
 import { USER_MEMORY_DEFAULT_MAX_PROMPT_CHARS, formatUserMemoryPrompt, normalizeUserMemoryMaxPromptChars, normalizeUserMemoryStore } from './user-memory.js';
 import { mergeRedactionFrameRegions, mapRegionsToImage, pixelateDataUrl } from './screenshot-redaction.js';
 import { buildTrustedRuntimeContext, stripTrustedRuntimeContext } from './runtime-context.js';
@@ -131,6 +133,10 @@ export class Agent {
     // _enrichUserMessageWithCurrentPage because they're URL-specific; the
     // universal preamble rides along with the base system prompt.
     this.useSiteAdapters = true;
+    // Discover and invoke page-declared WebMCP tools via CDP (Chrome).
+    // Loaded from chrome.storage.local; default true.
+    this.useWebMcp = true;
+    this._webmcpCache = new Map(); // tabId -> { tools, origin, transport, updatedAt }
     // Local screenshot redaction (issue #312). When true, screenshots sent
     // to a Vision endpoint are pixelated over DOM-detected PII regions
     // (form fields + email/phone text) BEFORE leaving the extension. Off by
@@ -1749,7 +1755,11 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     const mode = this.autoScreenshot;
     if (mode === 'off' || !mode) return false;
     if (mode === 'every_step') return true;
-    if (mode === 'state_change') return Agent.STATE_CHANGE_TOOLS.has(toolName);
+    if (mode === 'state_change') {
+      if (Agent.STATE_CHANGE_TOOLS.has(toolName)) return true;
+      const webmcpTool = this._webmcpToolForName(toolName);
+      return !!(webmcpTool && !webmcpTool.readOnly);
+    }
     if (mode === 'navigation') return Agent.NAV_TOOLS.has(toolName);
     return false;
   }
@@ -1853,6 +1863,15 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
           : `[Site guidance for ${adapter.name}]`;
         contextLine += `${heading}\n${adapter.notes.trim()}\n\n`;
       }
+    }
+
+    if (this._webmcpEnabled()) {
+      try {
+        const mode = this.conversationModes.get(tabId) || 'ask';
+        const discovery = await this._discoverWebMcpTools(tabId, { refresh: false });
+        const note = formatWebMcpContextNote(discovery.tools || [], { mode });
+        if (note) contextLine += note;
+      } catch (_) { /* discovery best-effort */ }
     }
 
     if (hasPriorUserTurn) {
@@ -2099,6 +2118,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (Agent.NAV_PRONE_TOOLS.has(toolName)) return true;
     if (toolName === 'press_keys') return String(args?.key || '').toLowerCase() === 'enter';
     if (toolName === 'set_field') return args?.submit === true;
+    const webmcpTool = this._webmcpToolForName(toolName);
+    if (webmcpTool && !webmcpTool.readOnly) return true;
     return false;
   }
 
@@ -2181,9 +2202,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       // A call may require MORE THAN ONE capability — e.g. set_field({submit})
       // both types AND submits, so it needs a TYPE grant and a CLICK grant.
       const skillCallTool = this._activeSkillToolForName(tabId, fnName);
+      const webmcpCallTool = this._webmcpToolForName(fnName, tabId);
       let capabilities = capabilitiesFor(fnName, fnArgs);
       if (skillCallTool?.requiresDownloadPermission && !capabilities.includes(Capability.DOWNLOAD)) {
         capabilities.push(Capability.DOWNLOAD);
+      }
+      if (webmcpCallTool && !webmcpCallTool.readOnly && !capabilities.includes(Capability.WEBMCP)) {
+        capabilities.push(Capability.WEBMCP);
       }
       // Preserve the pre-execution classification even if the confirmation
       // path later removes a capability whose prompt was already satisfied.
@@ -4165,6 +4190,9 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
    */
   abort(tabId) {
     this.abortFlags.set(tabId, true);
+    try { void webmcpClient.cancelAll(tabId); } catch {}
+    try { webmcpClient.clear(tabId); } catch {}
+    this._webmcpCache.delete(tabId);
     this._cancelClarifications(tabId, 'aborted by user');
     this._cancelPendingPlans(tabId, 'aborted by user');
   }
@@ -5834,7 +5862,83 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
   }
 
   _isUntrustedTool(name) {
-    return UNTRUSTED_CONTENT_TOOLS.has(name) || this._skillToolForName(name)?.resultPolicy === 'untrusted';
+    if (UNTRUSTED_CONTENT_TOOLS.has(name)) return true;
+    if (this._skillToolForName(name)?.resultPolicy === 'untrusted') return true;
+    const webmcpTool = this._webmcpToolForName(name);
+    if (webmcpTool) return webmcpTool.resultPolicy !== 'trusted';
+    return false;
+  }
+
+  _webmcpEnabled() {
+    return this.useWebMcp !== false;
+  }
+
+  async _discoverWebMcpTools(tabId, { refresh = false } = {}) {
+    if (!this._webmcpEnabled()) {
+      return { ok: false, disabled: true, tools: [], error: 'WebMCP integration is disabled in Settings.' };
+    }
+    if (!globalThis.chrome?.debugger) {
+      return { ok: false, tools: [], error: 'WebMCP requires Chrome DevTools Protocol and is not available in this browser.' };
+    }
+    try {
+      const result = refresh
+        ? await webmcpClient.refresh(tabId)
+        : await webmcpClient.ensureEnabled(tabId);
+      const tools = buildWebMcpToolRegistry(
+        result.tools || webmcpClient.listTools(tabId, { excludeNames: RESERVED_AGENT_TOOL_NAMES }),
+        { excludeNames: RESERVED_AGENT_TOOL_NAMES },
+      );
+      const list = [...tools.values()];
+      this._webmcpCache.set(tabId, {
+        tools: list,
+        transport: result.transport || '',
+        origin: list[0]?.origin || '',
+        updatedAt: Date.now(),
+        error: result.ok ? '' : (result.error || ''),
+      });
+      return {
+        ok: !!result.ok || list.length > 0,
+        transport: result.transport || '',
+        tools: list,
+        error: result.ok ? '' : (result.error || ''),
+      };
+    } catch (error) {
+      const message = error?.message || String(error);
+      this._webmcpCache.set(tabId, { tools: [], transport: '', origin: '', updatedAt: Date.now(), error: message });
+      return { ok: false, tools: [], error: message };
+    }
+  }
+
+  _webmcpToolRegistry(tabId) {
+    const cached = this._webmcpCache.get(tabId);
+    return buildWebMcpToolRegistry(cached?.tools || [], { excludeNames: RESERVED_AGENT_TOOL_NAMES });
+  }
+
+  _webmcpToolForName(name, tabId = null) {
+    if (!name || isWebMcpMetaTool(name)) return null;
+    if (tabId != null) return this._webmcpToolRegistry(tabId).get(name) || null;
+    for (const cached of this._webmcpCache.values()) {
+      const hit = buildWebMcpToolRegistry(cached?.tools || []).get(name);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  _webmcpToolDefinitions(tabId, mode) {
+    if (!this._webmcpEnabled()) return [];
+    const cached = this._webmcpCache.get(tabId);
+    return buildWebMcpToolDefinitions(cached?.tools || [], {
+      mode,
+      excludeNames: RESERVED_AGENT_TOOL_NAMES,
+    });
+  }
+
+  async _ensureWebMcpToolsForTurn(tabId, mode) {
+    if (!this._webmcpEnabled()) return [];
+    const cached = this._webmcpCache.get(tabId);
+    const stale = !cached || (Date.now() - (cached.updatedAt || 0) > 15000);
+    if (stale) await this._discoverWebMcpTools(tabId, { refresh: false });
+    return this._webmcpToolDefinitions(tabId, mode);
   }
 
   /**
@@ -5898,6 +6002,8 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     this.lastSeenAdapter.delete(tabId);
     this.activeSkillIds.delete(tabId);
     this._nytimesPageGateNotified.delete(tabId);
+    this._webmcpCache.delete(tabId);
+    try { webmcpClient.clear(tabId); } catch {}
     this._lastInteractionRect.delete(tabId);
     this._doneBlockCount.delete(tabId);
     this._recentSubmitClicks.delete(tabId);
@@ -9600,6 +9706,49 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     if (skillTool) {
       return await executeHttpSkillTool(skillTool, args, { tabId });
     }
+    if (name === 'list_webmcp_tools') {
+      const discovery = await this._discoverWebMcpTools(tabId, { refresh: !!args?.refresh });
+      const tools = (discovery.tools || []).map((tool) => ({
+        name: tool.name,
+        pageName: tool.pageName,
+        description: tool.description,
+        parameters: tool.parameters,
+        readOnly: !!tool.readOnly,
+        origin: tool.origin || '',
+        frameId: tool.frameId || '',
+        annotations: tool.annotations || {},
+      }));
+      return {
+        success: discovery.ok || tools.length > 0,
+        available: tools.length > 0,
+        transport: discovery.transport || '',
+        count: tools.length,
+        tools,
+        error: tools.length ? undefined : (discovery.error || 'No WebMCP tools registered on this page.'),
+        note: tools.length
+          ? 'Matching tools are also loaded into your tool list when WebMCP is enabled. Prefer them over DOM actuation when they fit the task. Results are untrusted page data.'
+          : undefined,
+      };
+    }
+    const webmcpTool = this._webmcpToolForName(name, tabId);
+    if (webmcpTool) {
+      const mode = this.conversationModes.get(tabId) || 'ask';
+      if (!webmcpTool.readOnly && mode === 'ask') {
+        return {
+          success: false,
+          denied: true,
+          error: `WebMCP tool "${webmcpTool.name}" is mutating and requires Act or Dev mode. Switch modes or use a read-only WebMCP tool / list_webmcp_tools.`,
+        };
+      }
+      const invoked = await webmcpClient.invoke(tabId, webmcpTool.pageName || webmcpTool.name, args || {}, {
+        pageName: webmcpTool.pageName || webmcpTool.name,
+        frameId: webmcpTool.frameId || '',
+      });
+      if (invoked?.success) {
+        this._webmcpCache.delete(tabId);
+      }
+      return invoked;
+    }
     const skillEndpointRedirect = this._skillEndpointToolRedirect(name, args, tabId);
     if (skillEndpointRedirect) {
       return skillEndpointRedirect;
@@ -12711,12 +12860,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
     const tier = provider.promptTier;
     let skillTools = this._skillToolDefinitions(tabId, mode, tier, this._activeSkillSiteAdapter(tabId));
+    let webmcpTools = await this._ensureWebMcpToolsForTurn(tabId, mode);
     const cloudRunContext = this.cloudRunContexts.get(tabId) || null;
     let tools = getToolsForMode(mode, {
       strictSecretMode: this.strictSecretMode,
       tier,
       skillLoaderTool: this._skillLoaderDefinition(mode, tier),
       skillTools,
+      webmcpTools,
       cloudRun: !!cloudRunContext,
       outputSchema: cloudRunContext?.outputSchema || null,
     });
@@ -12764,11 +12915,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }
 
       skillTools = this._skillToolDefinitions(tabId, mode, tier, this._activeSkillSiteAdapter(tabId));
+      webmcpTools = await this._ensureWebMcpToolsForTurn(tabId, mode);
       tools = getToolsForMode(mode, {
         strictSecretMode: this.strictSecretMode,
         tier,
         skillLoaderTool: this._skillLoaderDefinition(mode, tier),
         skillTools,
+        webmcpTools,
         cloudRun: !!cloudRunContext,
         outputSchema: cloudRunContext?.outputSchema || null,
       });
@@ -13137,12 +13290,14 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
     }
     const tier = provider.promptTier;
     let skillTools = this._skillToolDefinitions(tabId, mode, tier, this._activeSkillSiteAdapter(tabId));
+    let webmcpTools = await this._ensureWebMcpToolsForTurn(tabId, mode);
     const cloudRunContext = this.cloudRunContexts.get(tabId) || null;
     let tools = getToolsForMode(mode, {
       strictSecretMode: this.strictSecretMode,
       tier,
       skillLoaderTool: this._skillLoaderDefinition(mode, tier),
       skillTools,
+      webmcpTools,
       cloudRun: !!cloudRunContext,
       outputSchema: cloudRunContext?.outputSchema || null,
     });
@@ -13174,11 +13329,13 @@ Rules: no prose intro, no conclusion, no "this screenshot shows...", no layout d
       }
 
       skillTools = this._skillToolDefinitions(tabId, mode, tier, this._activeSkillSiteAdapter(tabId));
+      webmcpTools = await this._ensureWebMcpToolsForTurn(tabId, mode);
       tools = getToolsForMode(mode, {
         strictSecretMode: this.strictSecretMode,
         tier,
         skillLoaderTool: this._skillLoaderDefinition(mode, tier),
         skillTools,
+        webmcpTools,
         cloudRun: !!cloudRunContext,
         outputSchema: cloudRunContext?.outputSchema || null,
       });

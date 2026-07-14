@@ -26,11 +26,13 @@ export const Capability = {
   CLICK: 'click',                // click / click_ax / iframe_click / drag_drop / Enter / submit
   TYPE: 'type',                  // type_text / type_ax / iframe_type / set_field (no submit)
   EXECUTE_JS: 'execute_js',      // execute_js
+  DEV_PATCH: 'dev_patch',        // temporary page edits, including listener target markers
   NETWORK: 'network_write',      // fetch_url / research_url with a write method
   DOWNLOAD: 'download',          // download_* tools
-  UPLOAD: 'upload',              // upload_file (attach a file to a page input)
+  UPLOAD: 'upload',              // upload_file (selects a local file)
   WINDOW: 'window',              // resize_window (changes browser window bounds)
   SCHEDULE: 'schedule',          // schedule_resume / schedule_task persistent future work
+  WEBMCP: 'webmcp',              // mutating page-declared WebMCP tools
 };
 
 // Human-readable verb for the permission prompt: "WebBrain wants to <label> <host>".
@@ -39,11 +41,13 @@ export const CAPABILITY_LABEL = {
   [Capability.CLICK]: 'click / submit on',
   [Capability.TYPE]: 'type into',
   [Capability.EXECUTE_JS]: 'run JavaScript on',
+  [Capability.DEV_PATCH]: 'temporarily modify the page on',
   [Capability.NETWORK]: 'make a network request to',
   [Capability.DOWNLOAD]: 'download files from',
-  [Capability.UPLOAD]: 'upload a file on',
+  [Capability.UPLOAD]: 'upload a file to',
   [Capability.WINDOW]: 'resize the browser window for',
   [Capability.SCHEDULE]: 'schedule future work for',
+  [Capability.WEBMCP]: 'use page WebMCP tools on',
 };
 
 /**
@@ -69,6 +73,12 @@ export const UNTRUSTED_CONTENT_TOOLS = new Set([
   'read_page_source',
   'read_downloaded_file',
   'inspect_element_styles',
+  'read_console',
+  'inspect_network_requests',
+  'inspect_event_listeners',
+  'highlight_element',
+  'patch_element',
+  'revert_patch',
   'progress_update',
   'progress_read',
   // click/type_text can return page-derived labels, option text, aria-labels,
@@ -86,7 +96,6 @@ export const UNTRUSTED_CONTENT_TOOLS = new Set([
   'download_resource_from_page',
   'download_files',
   'download_file',
-  'upload_file',
   // hover returns the element's accessible name (aria-label/title/innerText).
   'hover',
   // list_downloads returns each download's url + filename; the filename can
@@ -103,6 +112,8 @@ export const UNTRUSTED_CONTENT_TOOLS = new Set([
   // are persisted as the final tool message and re-read on the next user turn.
   // The model-authored `summary` is wrapped too, which is harmless.
   'done',
+  // WebMCP meta-tool returns page-declared tool schemas/descriptions.
+  'list_webmcp_tools',
 ]);
 
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -137,14 +148,22 @@ const TOOL_CAPABILITY = {
   type_ax: Capability.TYPE,
   iframe_type: Capability.TYPE,
   execute_js: Capability.EXECUTE_JS,
+  inject_css: Capability.DEV_PATCH,
+  remove_injected_css: Capability.DEV_PATCH,
+  patch_element: Capability.DEV_PATCH,
+  revert_patch: Capability.DEV_PATCH,
+  inspect_event_listeners: Capability.DEV_PATCH,
+  highlight_element: Capability.DEV_PATCH,
+  upload_file: Capability.UPLOAD,
   resize_window: Capability.WINDOW,
   download_file: Capability.DOWNLOAD,
   download_files: Capability.DOWNLOAD,
   download_resource_from_page: Capability.DOWNLOAD,
   download_social_media: Capability.DOWNLOAD,
-  upload_file: Capability.UPLOAD,
   schedule_resume: Capability.SCHEDULE,
   schedule_task: Capability.SCHEDULE,
+  // Dynamic page WebMCP tools are gated in agent.js via Capability.WEBMCP when
+  // the page tool is not annotated readOnly. list_webmcp_tools is read-only.
 };
 
 /**
@@ -154,7 +173,7 @@ const TOOL_CAPABILITY = {
  *     query string to an attacker host, and research_url opens a background
  *     tab. Gated per destination host (egress is consequential).
  *   - legacy screenshot handlers: read-only, EXCEPT save:true writes a file
- *     via downloads → DOWNLOAD. These are not model-exposed tools.
+ *     via chrome.downloads → DOWNLOAD. These are not model-exposed tools.
  *   - set_field: TYPE normally, but CLICK when submit:true (pressing Enter
  *     submits the form — a TYPE grant must not authorize a submit).
  *   - press_keys: Enter can submit/activate → CLICK; Tab/Escape are benign.

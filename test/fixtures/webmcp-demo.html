@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WebBrain WebMCP demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3efe6;
+      --ink: #1c1917;
+      --accent: #0f766e;
+      --card: #fffdf8;
+    }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 10% 0%, #d9f3ef 0%, transparent 40%),
+        radial-gradient(circle at 90% 10%, #f6e7c8 0%, transparent 35%),
+        var(--bg);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 48px 20px 80px;
+    }
+    h1 { font-family: "Fraunces", Georgia, serif; font-weight: 600; margin: 0 0 8px; }
+    p { line-height: 1.5; }
+    #status {
+      margin: 16px 0 24px;
+      padding: 10px 12px;
+      background: var(--card);
+      border-left: 4px solid var(--accent);
+    }
+    ul { padding-left: 18px; }
+    button {
+      background: var(--accent);
+      color: white;
+      border: 0;
+      padding: 10px 14px;
+      font: inherit;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>WebMCP demo</h1>
+    <p>
+      This page registers WebMCP tools when <code>document.modelContext</code>
+      (or legacy <code>navigator.modelContext</code>) is available. Use it to
+      exercise WebBrain discovery and invocation.
+    </p>
+    <div id="status">Checking WebMCP…</div>
+    <h2>Todos</h2>
+    <ul id="todos"></ul>
+    <button type="button" id="seed">Seed example todos</button>
+  </main>
+  <script>
+    const statusEl = document.getElementById('status');
+    const todosEl = document.getElementById('todos');
+    const todos = [];
+
+    function render() {
+      todosEl.innerHTML = '';
+      for (const item of todos) {
+        const li = document.createElement('li');
+        li.textContent = item.done ? `✓ ${item.text}` : item.text;
+        todosEl.appendChild(li);
+      }
+    }
+
+    function getModelContext() {
+      return document.modelContext || navigator.modelContext || null;
+    }
+
+    async function registerTools() {
+      const ctx = getModelContext();
+      if (!ctx || typeof ctx.registerTool !== 'function') {
+        statusEl.textContent = 'WebMCP API not available. Enable chrome://flags/#enable-webmcp-testing and reload.';
+        return;
+      }
+
+      await ctx.registerTool({
+        name: 'list_todos',
+        description: 'List todos on this demo page.',
+        inputSchema: { type: 'object', properties: {}, required: [] },
+        annotations: { readOnlyHint: true, untrustedContentHint: true },
+        execute: async () => JSON.stringify({ todos }),
+      });
+
+      await ctx.registerTool({
+        name: 'add_todo',
+        description: 'Add a todo item to the demo list.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'Todo text' },
+          },
+          required: ['text'],
+        },
+        annotations: { readOnlyHint: false, untrustedContentHint: true },
+        execute: async ({ text }) => {
+          const item = { text: String(text || '').trim(), done: false };
+          if (!item.text) return 'Empty todo ignored';
+          todos.push(item);
+          render();
+          return `Added todo: ${item.text}`;
+        },
+      });
+
+      await ctx.registerTool({
+        name: 'complete_todo',
+        description: 'Mark a todo complete by exact text match.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'Exact todo text' },
+          },
+          required: ['text'],
+        },
+        execute: async ({ text }) => {
+          const item = todos.find((t) => t.text === String(text || ''));
+          if (!item) return `No todo matching "${text}"`;
+          item.done = true;
+          render();
+          return `Completed: ${item.text}`;
+        },
+      });
+
+      statusEl.textContent = 'WebMCP tools registered: list_todos, add_todo, complete_todo.';
+    }
+
+    document.getElementById('seed').addEventListener('click', () => {
+      todos.push({ text: 'Buy milk', done: false }, { text: 'Write docs', done: false });
+      render();
+    });
+
+    registerTools().catch((error) => {
+      statusEl.textContent = `WebMCP registration failed: ${error?.message || error}`;
+    });
+  </script>
+</body>
+</html>
