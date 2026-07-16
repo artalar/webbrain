@@ -5828,6 +5828,9 @@ test('getToolsForMode: webmcp tools merge like skill tools and respect reserved 
     assert.equal(names.includes('custom_page_tool'), true, `${label}: page tool missing`);
     assert.equal(names.includes('click'), false, `${label}: must not shadow core click`);
     assert.equal(names.includes('webmcp_click'), true, `${label}: colliding page tool should be prefixed`);
+    const firstCoreIdx = names.findIndex((name) => reserved.has(name) || name === 'list_webmcp_tools');
+    const webmcpIdx = names.indexOf('custom_page_tool');
+    assert.ok(webmcpIdx >= 0 && webmcpIdx < firstCoreIdx, `${label}: webmcp tools should precede core DOM/AX tools`);
   }
 });
 

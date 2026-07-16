@@ -1025,11 +1025,27 @@ export function getToolsForMode(mode, opts = {}) {
     const devTools = AGENT_TOOLS.filter(t => DEV_EXTENDED_TOOL_NAMES.has(t.function.name) && !seen.has(t.function.name));
     base = [...base, ...devTools];
   }
+  // Page WebMCP tools go first so models bias toward structured page tools
+  // over core DOM/AX actuation when both are available.
+  let webmcpExtras = [];
+  if (!devCompactBlocked && Array.isArray(opts.webmcpTools) && opts.webmcpTools.length) {
+    const seen = new Set(RESERVED_AGENT_TOOL_NAMES);
+    webmcpExtras = opts.webmcpTools.filter(t => {
+      const name = t?.function?.name;
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+  }
   if (!devCompactBlocked && tier !== 'compact' && opts.skillLoaderTool?.function?.name === 'load_skill') {
     base = [...base, opts.skillLoaderTool];
   }
   if (!devCompactBlocked && Array.isArray(opts.skillTools) && opts.skillTools.length) {
-    const seen = new Set([...RESERVED_AGENT_TOOL_NAMES, ...base.map(t => t.function?.name).filter(Boolean)]);
+    const seen = new Set([
+      ...RESERVED_AGENT_TOOL_NAMES,
+      ...webmcpExtras.map(t => t.function?.name).filter(Boolean),
+      ...base.map(t => t.function?.name).filter(Boolean),
+    ]);
     const extras = opts.skillTools.filter(t => {
       const name = t?.function?.name;
       if (!name || seen.has(name)) return false;
@@ -1038,15 +1054,8 @@ export function getToolsForMode(mode, opts = {}) {
     });
     base = [...base, ...extras];
   }
-  if (!devCompactBlocked && Array.isArray(opts.webmcpTools) && opts.webmcpTools.length) {
-    const seen = new Set([...RESERVED_AGENT_TOOL_NAMES, ...base.map(t => t.function?.name).filter(Boolean)]);
-    const extras = opts.webmcpTools.filter(t => {
-      const name = t?.function?.name;
-      if (!name || seen.has(name)) return false;
-      seen.add(name);
-      return true;
-    });
-    base = [...base, ...extras];
+  if (webmcpExtras.length) {
+    base = [...webmcpExtras, ...base];
   }
   const useDoneJson = normalizedMode === 'act' && tier === 'full' && opts.cloudRun === true && !!opts.outputSchema;
   if (useDoneJson) return base.map(tool => (tool.function.name === 'done' ? DONE_JSON_TOOL : tool));
