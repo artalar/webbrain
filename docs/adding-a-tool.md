@@ -15,6 +15,10 @@ There are two ways to add a model-callable tool:
   declared in a skill's `webbrain-tools` manifest. Use this when the tool is
   best treated as a trusted third-party extension rather than a WebBrain core
   primitive.
+- **WebMCP page tool**: discovered at runtime from the active tab via Chrome's
+  WebMCP CDP domain / `document.modelContext`. See `docs/webmcp.md`. Do not
+  hard-code page tools into `AGENT_TOOLS`; they are merged dynamically like
+  skill tools through `getToolsForMode({ webmcpTools })`.
 
 A core tool requires changes in three layers:
 

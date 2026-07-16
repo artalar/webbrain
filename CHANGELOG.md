@@ -62,6 +62,9 @@ This changelog was generated from the repository Git history and release tags. V
 
 ## [23.2.2] - 2026-07-15
 
+### Added
+- Added Chrome WebMCP integration (#305): discover page-declared tools via the CDP `WebMCP` domain (with `document.modelContext` fallback), load them into the model tool list each agent step, invoke through CDP/`executeTool`, gate mutating tools with `Capability.WEBMCP`, wrap results as untrusted page content, and expose `list_webmcp_tools` across Ask/Act/Dev. Settings → Advanced → WebMCP page tools (default on). Firefox keeps schema parity with a clear Chrome-only stub.
+
 ### Changed
 - Made enabled skills available on demand: Mid/Full Ask, Act, and Dev runs receive a small eligible name/summary catalog, full instructions and compatible tools load only for the current relevant run, and Compact exposes no skill surface.
 - Added optional prompt-stripped `webbrain-skill` metadata for capped summaries and explicit Ask/Act compatibility while preserving existing skill storage and `webbrain-tools` manifests.
@@ -70,6 +73,7 @@ This changelog was generated from the repository Git history and release tags. V
 - Replaced ambiguous Content-Disposition filename matching in Chrome and Firefox public-media downloads with a bounded single-pass parameter parser that preserves RFC 5987 precedence and fails closed on malformed quoted values.
 
 ### Tests
+- Added WebMCP helper, tool-merge, permission, Chrome/Firefox agent stub coverage, and `test/fixtures/webmcp-demo.html`.
 - Added mirrored coverage for skill catalog eligibility, activation isolation and reset, strict-secret ordering, recommended-action preactivation, and adversarial Content-Disposition filename parsing.
 
 ## [23.2.0] - 2026-07-14

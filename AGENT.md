@@ -61,6 +61,7 @@ vanilla JS/CSS unless there is a very strong reason to add a framework.
 - `docs/localization.md`: UI locale workflow and mirroring expectations.
 - `docs/privacy-and-data-flow.md` and `docs/security-model.md`: data handling,
   permissions, and user-risk model.
+- `docs/webmcp.md`: Chrome WebMCP discovery, invocation, and security model.
 - `docs/prompt-injection-defense.md`: mandatory reading for any change that
   passes page-derived content into prompts or tool results.
 

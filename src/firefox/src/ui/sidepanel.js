@@ -1585,6 +1585,7 @@ const TOOL_KEYS = {
   schedule_resume: 'tool.schedule_resume',
   schedule_task: 'tool.schedule_task',
   done: 'tool.done',
+  list_webmcp_tools: 'tool.list_webmcp_tools',
 };
 
 function friendlyToolLabel(name, args) {
@@ -1597,8 +1598,13 @@ function friendlyToolLabel(name, args) {
   if (name === 'scroll') return t('tool.scroll.direction', { direction: args?.direction || 'down' });
   if (name === 'extract_data') return t('tool.extract_data.type', { type: args?.type || 'data' });
   if (name === 'wait_for_element' && args?.selector) return t('tool.wait_for_element.selector', { selector: truncate(args.selector, 30) });
+  if (name === 'list_webmcp_tools') return t('tool.list_webmcp_tools');
   const key = TOOL_KEYS[name];
-  return key ? t(key) : name;
+  if (key) return t(key);
+  if (typeof name === 'string' && (name.startsWith('webmcp_') || /webmcp/i.test(name))) {
+    return t('tool.webmcp') + `: ${name}`;
+  }
+  return name;
 }
 
 function formatScheduledTime(value) {

@@ -27,6 +27,7 @@
 ## Features
 
 - **Page Reading** — Extracts text, links, forms, tables, and interactive elements from any page
+- **WebMCP Page Tools** — On Chrome, discovers site-declared WebMCP tools via CDP and prefers them over DOM actuation when available
 - **Browser Actions** — Click, type, scroll, navigate, and interact with page elements
 - **Ask / Act / Dev Modes** — Read-only by default, normal browser actions on request, and Dev add-ons for source/style/page-debugging work
 - **Plan before Act** — Act and Dev modes can generate a structured plan, show it for approval, then pin the approved plan to the scratchpad before tools run

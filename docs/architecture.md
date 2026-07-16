@@ -45,6 +45,7 @@ This doc covers the shared architecture and calls out where the builds diverge.
 │                                                      │
 │  Chrome only:                                        │
 │    ├─ cdp/             — Chrome DevTools Protocol    │
+│    │    └─ webmcp.js   — WebMCP tool discovery/call  │
 │    └─ offscreen/       — fetch proxy + tab recorder  │
 └──────┬──────────────────────────────────────────────┘
        │ chrome.scripting.executeScript / CDP
@@ -187,6 +188,7 @@ while (steps < maxSteps) {
 | `navigate`, `new_tab`, `go_back`, `go_forward` | `chrome.tabs` / `browser.tabs` API | Background script |
 | `fetch_url`, `research_url`, `list_downloads`, etc. | `network-tools.js` | Service worker |
 | Enabled skill tools | `skills.js` registry + `executeHttpSkillTool()` | Service worker |
+| WebMCP page tools (Chrome) | `cdp/webmcp.js` + `webmcp-tools.js` merge into `getToolsForMode` | CDP / page `modelContext` |
 | `done` | agent.js — captures verification screenshot + page state probe | Service worker + CDP |
 | `clarify` | agent.js — pauses for user input | Service worker |
 | `solve_captcha` | captcha-solver.js | Service worker + CapSolver API |

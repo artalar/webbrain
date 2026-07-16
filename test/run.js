@@ -310,7 +310,7 @@ const { createContextMenuPromptHandler: createContextMenuPromptHandlerFx } = awa
 );
 
 // permission-gate.js is pure JS (deterministic capability × origin gate).
-const { Capability, capabilityFor, capabilitiesFor, normalizeHost, hostForCapability, requiredHosts, frameHostMatches, isNetworkMutation, PermissionManager, UNTRUSTED_CONTENT_TOOLS } = await import(
+const { Capability, CAPABILITY_LABEL, capabilityFor, capabilitiesFor, normalizeHost, hostForCapability, requiredHosts, frameHostMatches, isNetworkMutation, PermissionManager, UNTRUSTED_CONTENT_TOOLS } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/agent/permission-gate.js').replace(/\\/g, '/')
 );
 const {
@@ -614,6 +614,26 @@ const {
   buildSkillToolRegistry: buildSkillToolRegistryFx,
 } = await import(
   'file://' + path.join(ROOT, 'src/firefox/src/agent/skills.js').replace(/\\/g, '/')
+);
+const {
+  sanitizeWebMcpToolName,
+  parseWebMcpInputSchema,
+  normalizeWebMcpTool,
+  normalizeWebMcpTools,
+  buildWebMcpToolDefinitions,
+  buildWebMcpToolRegistry,
+  formatWebMcpContextNote,
+  webmcpToolAllowedInMode,
+  WEBMCP_NAME_PREFIX,
+} = await import(
+  'file://' + path.join(ROOT, 'src/chrome/src/agent/webmcp-tools.js').replace(/\\/g, '/')
+);
+const {
+  sanitizeWebMcpToolName: sanitizeWebMcpToolNameFx,
+  buildWebMcpToolDefinitions: buildWebMcpToolDefinitionsFx,
+  formatWebMcpContextNote: formatWebMcpContextNoteFx,
+} = await import(
+  'file://' + path.join(ROOT, 'src/firefox/src/agent/webmcp-tools.js').replace(/\\/g, '/')
 );
 
 const SchedulerCh = await import(
@@ -5737,6 +5757,106 @@ test('runtime recovery hints mention Dev-only style tools only when available', 
 
       const devNoProgress = agent._noProgressRecoveryWarning(devTools);
       assert.match(devNoProgress, /\binspect_element_styles\b/, `${label}: dev no-progress warning may mention style inspection`);
+    }
+  }
+});
+
+
+test('webmcp helpers: sanitize names, parse schemas, and mode filtering', () => {
+  assert.equal(sanitizeWebMcpToolName('filter-templates'), 'filter_templates');
+  assert.equal(sanitizeWebMcpToolName('9bad'), 't_9bad');
+  assert.equal(sanitizeWebMcpToolNameFx('add-todo'), 'add_todo');
+
+  const schema = parseWebMcpInputSchema('{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}');
+  assert.equal(schema.type, 'object');
+  assert.equal(!!schema.properties.text, true);
+  assert.deepEqual(schema.required, ['text']);
+
+  const tool = normalizeWebMcpTool({
+    name: 'add-todo',
+    description: 'Add a todo',
+    inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+    annotations: { readOnly: false, untrustedContent: true },
+    frameId: 'frame-1',
+    origin: 'https://example.com',
+  }, { excludeNames: new Set(['navigate']) });
+  assert.equal(tool.name, 'add_todo');
+  assert.equal(tool.pageName, 'add-todo');
+  assert.equal(tool.readOnly, false);
+  assert.equal(tool.resultPolicy, 'untrusted');
+  assert.equal(webmcpToolAllowedInMode(tool, 'ask'), false);
+  assert.equal(webmcpToolAllowedInMode(tool, 'act'), true);
+
+  const colliding = normalizeWebMcpTool({
+    name: 'navigate',
+    description: 'page navigate',
+    inputSchema: { type: 'object', properties: {} },
+  }, { excludeNames: new Set(['navigate']) });
+  assert.equal(colliding.name, WEBMCP_NAME_PREFIX + 'navigate');
+
+  const defs = buildWebMcpToolDefinitions([
+    { name: 'list_todos', description: 'List', annotations: { readOnlyHint: true }, inputSchema: { type: 'object', properties: {} } },
+    { name: 'add_todo', description: 'Add', annotations: { readOnlyHint: false }, inputSchema: { type: 'object', properties: { text: { type: 'string' } } } },
+  ], { mode: 'ask', excludeNames: RESERVED_AGENT_TOOL_NAMES_CH });
+  assert.equal(defs.length, 1);
+  assert.equal(defs[0].function.name, 'list_todos');
+
+  const actDefs = buildWebMcpToolDefinitionsFx([
+    { name: 'add_todo', description: 'Add', annotations: { readOnlyHint: false }, inputSchema: { type: 'object', properties: {} } },
+  ], { mode: 'act', excludeNames: RESERVED_AGENT_TOOL_NAMES_FX });
+  assert.equal(actDefs.length, 1);
+
+  const note = formatWebMcpContextNote([
+    { name: 'add_todo', description: 'Add', annotations: { readOnly: false } },
+  ], { mode: 'act' });
+  assert.match(note, /WebMCP/);
+  assert.match(formatWebMcpContextNoteFx([{ name: 'add_todo', annotations: { readOnly: false } }], { mode: 'ask' }), /Act or Dev/);
+});
+
+test('getToolsForMode: webmcp tools merge like skill tools and respect reserved names', () => {
+  for (const [label, getToolsForMode, reserved] of [
+    ['chrome', getToolsForModeCh, RESERVED_AGENT_TOOL_NAMES_CH],
+    ['firefox', getToolsForModeFx, RESERVED_AGENT_TOOL_NAMES_FX],
+  ]) {
+    const webmcpTools = buildWebMcpToolDefinitions([
+      { name: 'custom_page_tool', description: 'Page tool', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: true } },
+      { name: 'click', description: 'Should collide', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: true } },
+    ], { mode: 'ask', excludeNames: reserved });
+    const tools = getToolsForMode('ask', { webmcpTools });
+    const names = tools.map((t) => t.function.name);
+    assert.equal(names.includes('list_webmcp_tools'), true, `${label}: list_webmcp_tools missing`);
+    assert.equal(names.includes('custom_page_tool'), true, `${label}: page tool missing`);
+    assert.equal(names.includes('click'), false, `${label}: must not shadow core click`);
+    assert.equal(names.includes('webmcp_click'), true, `${label}: colliding page tool should be prefixed`);
+    const firstCoreIdx = names.findIndex((name) => reserved.has(name) || name === 'list_webmcp_tools');
+    const webmcpIdx = names.indexOf('custom_page_tool');
+    assert.ok(webmcpIdx >= 0 && webmcpIdx < firstCoreIdx, `${label}: webmcp tools should precede core DOM/AX tools`);
+  }
+});
+
+test('permission-gate: Capability.WEBMCP exists and list_webmcp_tools is untrusted', () => {
+  assert.equal(Capability.WEBMCP, 'webmcp');
+  assert.equal(CAPABILITY_LABEL[Capability.WEBMCP], 'use page WebMCP tools on');
+  assert.equal(UNTRUSTED_CONTENT_TOOLS.has('list_webmcp_tools'), true);
+  assert.equal(UNTRUSTED_CONTENT_TOOLS_CH.has('list_webmcp_tools'), true);
+  assert.equal(capabilityFor('list_webmcp_tools', {}), null);
+});
+
+test('agent: list_webmcp_tools is chrome-capable and firefox-stubbed', async () => {
+  for (const [label, AgentClass] of [['chrome', AgentCh], ['firefox', AgentFx]]) {
+    const agent = new AgentClass({});
+    if (label === 'firefox') {
+      const result = await agent.executeTool(1, 'list_webmcp_tools', {});
+      assert.equal(result.success, false);
+      assert.match(result.error || '', /Chrome/i);
+      assert.deepEqual(await agent._ensureWebMcpToolsForTurn(1, 'act'), []);
+    } else {
+      assert.equal(typeof agent._discoverWebMcpTools, 'function');
+      assert.equal(typeof agent._ensureWebMcpToolsForTurn, 'function');
+      agent.useWebMcp = false;
+      const disabled = await agent._discoverWebMcpTools(1);
+      assert.equal(disabled.disabled, true);
+      assert.deepEqual(disabled.tools, []);
     }
   }
 });
@@ -23169,6 +23289,28 @@ test('normalizeHost strips scheme/www/port/path', () => {
   assert.equal(normalizeHost('http://example.com:8080/x'), 'example.com');
   assert.equal(normalizeHost('Example.com'), 'example.com');
   assert.equal(normalizeHost(''), '');
+});
+
+test('normalizeHost maps file:// pages to a stable local-file host', () => {
+  const fileUrl = 'file:///Users/me/webbrain/test/fixtures/webmcp-demo.html';
+  for (const [label, norm, Cap, hostFor, reqHosts] of [
+    ['firefox', normalizeHost, Capability, hostForCapability, requiredHosts],
+    ['chrome', normalizeHostCh, CapabilityCh, hostForCapabilityCh, requiredHostsCh],
+  ]) {
+    assert.equal(norm(fileUrl), 'local-file', `${label}: file:// URL`);
+    assert.equal(norm('file://localhost/tmp/x.html'), 'local-file', `${label}: file://localhost`);
+    assert.equal(norm('file:'), 'local-file', `${label}: bare file:`);
+    assert.equal(
+      hostFor(Cap.WEBMCP, { title: 'drink a tea' }, fileUrl, 'add_todo'),
+      'local-file',
+      `${label}: mutating WebMCP on file:// should charge local-file`
+    );
+    assert.deepEqual(
+      reqHosts(Cap.CLICK, { ref_id: 'ref_1' }, fileUrl, 'click_ax'),
+      ['local-file'],
+      `${label}: click on file:// should not fail-closed`
+    );
+  }
 });
 
 test('hostForCapability: navigate/network use target URL, others use current page', () => {
