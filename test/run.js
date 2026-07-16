@@ -23288,6 +23288,28 @@ test('normalizeHost strips scheme/www/port/path', () => {
   assert.equal(normalizeHost(''), '');
 });
 
+test('normalizeHost maps file:// pages to a stable local-file host', () => {
+  const fileUrl = 'file:///Users/me/webbrain/test/fixtures/webmcp-demo.html';
+  for (const [label, norm, Cap, hostFor, reqHosts] of [
+    ['firefox', normalizeHost, Capability, hostForCapability, requiredHosts],
+    ['chrome', normalizeHostCh, CapabilityCh, hostForCapabilityCh, requiredHostsCh],
+  ]) {
+    assert.equal(norm(fileUrl), 'local-file', `${label}: file:// URL`);
+    assert.equal(norm('file://localhost/tmp/x.html'), 'local-file', `${label}: file://localhost`);
+    assert.equal(norm('file:'), 'local-file', `${label}: bare file:`);
+    assert.equal(
+      hostFor(Cap.WEBMCP, { title: 'drink a tea' }, fileUrl, 'add_todo'),
+      'local-file',
+      `${label}: mutating WebMCP on file:// should charge local-file`
+    );
+    assert.deepEqual(
+      reqHosts(Cap.CLICK, { ref_id: 'ref_1' }, fileUrl, 'click_ax'),
+      ['local-file'],
+      `${label}: click on file:// should not fail-closed`
+    );
+  }
+});
+
 test('hostForCapability: navigate/network use target URL, others use current page', () => {
   assert.equal(hostForCapability(Capability.NAVIGATE, { url: 'https://dest.com/x' }, 'https://cur.com'), 'dest.com');
   assert.equal(hostForCapability(Capability.NETWORK, { url: 'https://api.dest.com' }, 'https://cur.com'), 'api.dest.com');

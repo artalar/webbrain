@@ -237,9 +237,14 @@ export function normalizeHost(input) {
   if (s.startsWith('//')) s = 'https:' + s; // protocol-relative → resolvable URL
   try {
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
-      return new URL(s).hostname.toLowerCase().replace(/^www\./, '');
+      const parsed = new URL(s);
+      // file:// has an empty hostname (origin is "null"), so mutating tools on
+      // local demo pages would otherwise fail-closed with no host to grant.
+      if (parsed.protocol === 'file:') return 'local-file';
+      return parsed.hostname.toLowerCase().replace(/^www\./, '');
     }
   } catch { /* fall through to bare-host parsing */ }
+  if (/^file:/i.test(s)) return 'local-file';
   let h = s.toLowerCase().replace(/^www\./, '').split('/')[0];
   // strip a :port (but leave IPv6 bracket forms alone)
   if (!h.startsWith('[')) {
